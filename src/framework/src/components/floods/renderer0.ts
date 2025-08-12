@@ -166,11 +166,7 @@ export default class FloodsRenderer {
     private _floodsResources: FloodsResources;
     private _terrainData: TerrainData | null = null;
     private _waterData: WaterData | null = null;
-    private _waterTextures: THREE.Texture[] = []; // 当前渲染使用的纹理组（最多4个）
-    private _nextWaterTextures: THREE.Texture[] = []; // 下一组预加载的纹理（最多4个）
-    private _currentTextureGroup: number = 0; // 当前渲染的纹理组索引
-    private _isLoadingNextGroup: boolean = false; // 是否正在加载下一组纹理
-    private _batchSize: number = 4; // 每批纹理数量
+    private _waterTextures: THREE.Texture[] = []; // 新增：在渲染器中缓存水体纹理
     private _simulationTime: number = 0.0;
     private _useConfigFile: boolean = false; // 新增变量，控制是否使用配置文件
 
@@ -220,14 +216,6 @@ export default class FloodsRenderer {
             texture.dispose();
         });
         this._waterTextures = [];
-        
-        this._nextWaterTextures.forEach(texture => {
-            texture.dispose();
-        });
-        this._nextWaterTextures = [];
-        
-        this._currentTextureGroup = 0;
-        this._isLoadingNextGroup = false;
         
         // 停止资源轮询
         if (this._floodsResources) {
@@ -608,12 +596,6 @@ export default class FloodsRenderer {
         const displayUpdateInterval = setInterval(async () => {
             try {
                 await this.updateWaterResources();
-                
-                // 打印纹理组状态
-                const status = this.getTextureGroupStatus();
-                console.log(`Texture status - Group: ${status.currentGroup}/${status.totalGroups}, ` +
-                          `Current batch: ${status.currentBatchSize}, Next ready: ${status.nextBatchReady}, ` +
-                          `Loading: ${status.isLoading}`);
             } catch (error) {
                 console.error('Error during dynamic water resource update:', error);
             }
@@ -653,141 +635,50 @@ export default class FloodsRenderer {
             // 直接替换数据
             this._waterData = data;
 
-            // 初次加载：当前纹理数量小于批量大小且有足够的URL时
-            if (this._waterTextures.length < this._batchSize && this._waterData.waterHuvMaps.length >= this._batchSize) {
-                await this.loadInitialTextureBatch();
+            // 检查是否有新的纹理URL需要加载
+            const currentTextureCount = this._waterTextures.length;
+            const requiredTextureCount = this._waterData.waterHuvMaps.length;
+            
+            if (requiredTextureCount > currentTextureCount) {
+                console.log(`Loading ${requiredTextureCount - currentTextureCount} new water textures...`);
+                
+                // 只加载新的纹理
+                for (let i = currentTextureCount; i < requiredTextureCount; i++) {
+                    const textureUrl = this._waterData.waterHuvMaps[i];
+                    const waterTexture = this._textureLoader.load(textureUrl, 
+                        // 纹理加载完成后的回调
+                        () => {
+                            console.log(`Texture loaded successfully: ${textureUrl}`);
+                        },
+                        // 纹理加载进度回调
+                        undefined,
+                        // 纹理加载失败回调
+                        (error) => {
+                            console.error(`Failed to load texture: ${textureUrl}`, error);
+                        }
+                    );
+                    
+                    // 设置纹理参数
+                    waterTexture.premultiplyAlpha = false;
+                    waterTexture.minFilter = THREE.NearestFilter;
+                    waterTexture.magFilter = THREE.LinearFilter;
+                    waterTexture.generateMipmaps = false;
+                    waterTexture.wrapS = THREE.ClampToEdgeWrapping;
+                    waterTexture.wrapT = THREE.ClampToEdgeWrapping;
+                    waterTexture.name = textureUrl;
+                    
+                    // 添加到纹理缓存
+                    this._waterTextures.push(waterTexture);
+                }
             }
 
             // 更新配置中的角点信息
             this._config.waterCorners3857 = this._waterData.waterCorners3857;
             
-            console.log(`Water resources updated. Current texture group: ${this._currentTextureGroup}, textures loaded: ${this._waterTextures.length}`);
+            console.log(`Water resources updated. Total textures: ${this._waterTextures.length}`);
         } catch (error) {
             console.error('Error updating water resources:', error);
         }
-    }
-
-    // 加载初始纹理批次（前4个）
-    private async loadInitialTextureBatch(): Promise<void> {
-        if (!this._waterData) return;
-
-        console.log('Loading initial texture batch...');
-        const startIndex = 0;
-        const endIndex = Math.min(this._batchSize, this._waterData.waterHuvMaps.length);
-        
-        for (let i = startIndex; i < endIndex; i++) {
-            const textureUrl = this._waterData.waterHuvMaps[i];
-            const texture = await this.loadTextureAsync(textureUrl);
-            this._waterTextures.push(texture);
-        }
-        
-        this._currentTextureGroup = 0;
-        console.log(`Initial texture batch loaded: ${this._waterTextures.length} textures`);
-    }
-
-    // 加载下一组纹理批次
-    private async loadNextTextureBatch(): Promise<void> {
-        if (!this._waterData || this._isLoadingNextGroup) return;
-
-        this._isLoadingNextGroup = true;
-        console.log('Loading next texture batch...');
-
-        const nextGroupIndex = this._currentTextureGroup + 1;
-        const startIndex = nextGroupIndex * this._batchSize;
-        const endIndex = Math.min(startIndex + this._batchSize, this._waterData.waterHuvMaps.length);
-        
-        // 如果没有更多纹理，循环回到开始
-        const actualStartIndex = startIndex >= this._waterData.waterHuvMaps.length ? 0 : startIndex;
-        const actualEndIndex = startIndex >= this._waterData.waterHuvMaps.length ? 
-            Math.min(this._batchSize, this._waterData.waterHuvMaps.length) : endIndex;
-        
-        // 清理上一组预加载的纹理
-        this._nextWaterTextures.forEach(texture => texture.dispose());
-        this._nextWaterTextures = [];
-        
-        // 加载新的纹理批次
-        for (let i = actualStartIndex; i < actualEndIndex; i++) {
-            const textureUrl = this._waterData.waterHuvMaps[i];
-            try {
-                const texture = await this.loadTextureAsync(textureUrl);
-                this._nextWaterTextures.push(texture);
-            } catch (error) {
-                console.error(`Failed to load texture ${textureUrl}:`, error);
-            }
-        }
-        
-        this._isLoadingNextGroup = false;
-        console.log(`Next texture batch loaded: ${this._nextWaterTextures.length} textures`);
-    }
-
-    // 切换到下一组纹理
-    private switchToNextTextureBatch(): void {
-        if (this._nextWaterTextures.length === 0) return;
-
-        console.log('Switching to next texture batch...');
-        
-        // 清理当前纹理
-        this._waterTextures.forEach(texture => texture.dispose());
-        
-        // 切换到下一组
-        this._waterTextures = this._nextWaterTextures;
-        this._nextWaterTextures = [];
-        
-        // 更新当前组索引
-        this._currentTextureGroup = (this._currentTextureGroup + 1) % Math.ceil(this._waterData!.waterHuvMaps.length / this._batchSize);
-        
-        console.log(`Switched to texture group ${this._currentTextureGroup}`);
-        
-        // 立即开始加载下一组
-        this.loadNextTextureBatch();
-    }
-
-    // 异步加载单个纹理
-    private loadTextureAsync(url: string): Promise<THREE.Texture> {
-        return new Promise((resolve, reject) => {
-            const texture = this._textureLoader.load(
-                url,
-                // 加载成功回调
-                () => {
-                    console.log(`Texture loaded successfully: ${url}`);
-                    resolve(texture);
-                },
-                // 加载进度回调
-                undefined,
-                // 加载失败回调
-                (error) => {
-                    console.error(`Failed to load texture: ${url}`, error);
-                    reject(error);
-                }
-            );
-            
-            // 设置纹理参数
-            texture.premultiplyAlpha = false;
-            texture.minFilter = THREE.NearestFilter;
-            texture.magFilter = THREE.LinearFilter;
-            texture.generateMipmaps = false;
-            texture.wrapS = THREE.ClampToEdgeWrapping;
-            texture.wrapT = THREE.ClampToEdgeWrapping;
-            texture.name = url;
-        });
-    }
-
-    // 获取纹理组状态信息
-    getTextureGroupStatus(): {
-        currentGroup: number;
-        totalGroups: number;
-        currentBatchSize: number;
-        nextBatchReady: boolean;
-        isLoading: boolean;
-    } {
-        const totalGroups = this._waterData ? Math.ceil(this._waterData.waterHuvMaps.length / this._batchSize) : 0;
-        return {
-            currentGroup: this._currentTextureGroup,
-            totalGroups,
-            currentBatchSize: this._waterTextures.length,
-            nextBatchReady: this._nextWaterTextures.length > 0,
-            isLoading: this._isLoadingNextGroup
-        };
     }
 
     updateTerrainUniforms(time: number) {
@@ -824,18 +715,6 @@ export default class FloodsRenderer {
         currIndex = Math.max(0, Math.min(currIndex, numRasters - 1));
         nextIndex = Math.max(0, Math.min(nextIndex, numRasters - 1));
 
-        // 检查是否需要切换到下一批纹理
-        // 当当前批次的最后一个纹理渲染完成时，切换到下一批
-        if (currIndex === numRasters - 1 && timeStep > 0.9 && this._nextWaterTextures.length > 0) {
-            this.switchToNextTextureBatch();
-            return; // 本帧跳过渲染，等待下一帧使用新纹理
-        }
-        
-        // 如果当前批次即将结束但下一批还未准备好，开始加载下一批
-        if (currIndex === numRasters - 2 && !this._isLoadingNextGroup && this._nextWaterTextures.length === 0) {
-            this.loadNextTextureBatch();
-        }
-
         // 确保纹理加载完成
         if (!this._waterTextures[currIndex] || !this._waterTextures[nextIndex]) {
             console.warn('Skipping frame update: textures not fully loaded');
@@ -857,27 +736,23 @@ export default class FloodsRenderer {
         uniforms.huvMapBefore.value = this._waterTextures[currIndex];
         uniforms.huvMapAfter.value = this._waterTextures[nextIndex];
 
-        // 计算在整个数据集中的实际索引
-        const globalCurrIndex = this._currentTextureGroup * this._batchSize + currIndex;
-        const globalNextIndex = this._currentTextureGroup * this._batchSize + nextIndex;
-        
         // 确保数据数组索引有效
-        if (globalCurrIndex < this._waterData.waterHeightMin.length) {
-            uniforms.minWaterHeightBefore.value = this._waterData.waterHeightMin[globalCurrIndex];
-            uniforms.maxWaterHeightBefore.value = this._waterData.waterHeightMax[globalCurrIndex];
-            uniforms.minVelocityUBefore.value = this._waterData.velocityUMin[globalCurrIndex];
-            uniforms.maxVelocityUBefore.value = this._waterData.velocityUMax[globalCurrIndex];
-            uniforms.minVelocityVBefore.value = this._waterData.velocityVMin[globalCurrIndex];
-            uniforms.maxVelocityVBefore.value = this._waterData.velocityVMax[globalCurrIndex];
+        if (currIndex < this._waterData.waterHeightMin.length) {
+            uniforms.minWaterHeightBefore.value = this._waterData.waterHeightMin[currIndex];
+            uniforms.maxWaterHeightBefore.value = this._waterData.waterHeightMax[currIndex];
+            uniforms.minVelocityUBefore.value = this._waterData.velocityUMin[currIndex];
+            uniforms.maxVelocityUBefore.value = this._waterData.velocityUMax[currIndex];
+            uniforms.minVelocityVBefore.value = this._waterData.velocityVMin[currIndex];
+            uniforms.maxVelocityVBefore.value = this._waterData.velocityVMax[currIndex];
         }
 
-        if (globalNextIndex < this._waterData.waterHeightMin.length) {
-            uniforms.minWaterHeightAfter.value = this._waterData.waterHeightMin[globalNextIndex];
-            uniforms.maxWaterHeightAfter.value = this._waterData.waterHeightMax[globalNextIndex];
-            uniforms.minVelocityUAfter.value = this._waterData.velocityUMin[globalNextIndex];
-            uniforms.maxVelocityUAfter.value = this._waterData.velocityUMax[globalNextIndex];
-            uniforms.minVelocityVAfter.value = this._waterData.velocityVMin[globalNextIndex];
-            uniforms.maxVelocityVAfter.value = this._waterData.velocityVMax[globalNextIndex];
+        if (nextIndex < this._waterData.waterHeightMin.length) {
+            uniforms.minWaterHeightAfter.value = this._waterData.waterHeightMin[nextIndex];
+            uniforms.maxWaterHeightAfter.value = this._waterData.waterHeightMax[nextIndex];
+            uniforms.minVelocityUAfter.value = this._waterData.velocityUMin[nextIndex];
+            uniforms.maxVelocityUAfter.value = this._waterData.velocityUMax[nextIndex];
+            uniforms.minVelocityVAfter.value = this._waterData.velocityVMin[nextIndex];
+            uniforms.maxVelocityVAfter.value = this._waterData.velocityVMax[nextIndex];
         }
     }
 
