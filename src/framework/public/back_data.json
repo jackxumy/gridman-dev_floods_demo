@@ -1,0 +1,23 @@
+{
+    "success": true,
+    "data": {
+        "durationTime": 1000,
+        "waterHuvMaps": "http://localhost:8001/simulations/simulation1/1/huv.png?version=2",
+        "waterHuvMapsSize": [
+            1260,
+            696
+        ],
+        "waterHeightMin": 0.0,
+        "waterHeightMax": 12.167801856994629,
+        "velocityUMin": -0.27121344208717346,
+        "velocityUMax": 3.7258987426757812,
+        "velocityVMin": -1.3550775051116943,
+        "velocityVMax": 3.334584951400757,
+        "waterCorners3857": [
+        [12679908.694269724, 2560857.067962554],
+        [12707198.042336278, 2560857.067962554],
+        [12707198.042336278, 2575922.746308551],
+        [12679908.694269724, 2575922.746308551]
+        ]
+    }
+}

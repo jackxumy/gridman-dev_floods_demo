@@ -1,0 +1,22 @@
+{
+  "name": "gridman",
+  "version": "1.0.0",
+  "main": "electron/dist/main.js",
+  "scripts": {
+    "build:electron": "tsc -p electron/tsconfig.json",
+    "start": "npm run build:electron && electron .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@hello-pangea/dnd": "^18.0.1",
+    "@radix-ui/react-progress": "^1.1.6",
+    "electron": "^36.2.1",
+    "mapbox-gl-draw-rectangle-mode": "^1.0.4"
+  }
+}
