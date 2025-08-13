@@ -779,15 +779,6 @@ export default class FloodsRenderer {
 
     updateWaterUniforms2(time: number, stepStartCallback: () => void) {
         console.log(1)
-        const material = this._waterMesh?.material as THREE.ShaderMaterial;
-        if (!material || !this._waterData || this._waterTextures.length === 0 || !this._terrainData || !this._terrainData.terrainTexture) {
-            return;
-        }
-
-        const numRasters = this._waterTextures.length;
-        if (numRasters < 1) {
-            return;
-        }
 
         // 使用固定的帧时长进行连续播放
         const frameDuration = this._floodsResources.getFrameDuration();
@@ -803,6 +794,11 @@ export default class FloodsRenderer {
         }
 
         // 更新uniforms
+        const material = this._waterMesh?.material as THREE.ShaderMaterial;
+        if (!material || !this._terrainData || !this._waterData || !this.currentBeforeWaterTexture || !this.currentAfterWaterTexture) {
+            return;
+        }
+
         const uniforms = material.uniforms;
 
         uniforms.time.value = time;
