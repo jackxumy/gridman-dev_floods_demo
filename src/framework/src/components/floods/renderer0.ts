@@ -82,10 +82,10 @@ const defaultConfig: FloodsConfig = {
 
     waterGeometrySize: [640, 640],
     waterCorners3857: [
-        [12679908.694269724, 2560846.214908679], 
-        [12807202.416285772, 2560846.214908679], 
-        [12707202.416285772, 2575922.747069924], 
-        [12679908.694269724, 2575922.746308551] 
+        [12679908.694269724, 2560846.214908679],
+        [12807202.416285772, 2560846.214908679],
+        [12707202.416285772, 2575922.747069924],
+        [12679908.694269724, 2575922.746308551]
     ],
 
     foamMap: './floods/Textures/Foam.png',
@@ -155,6 +155,16 @@ export type WaterData = {
     velocityVMax: number[];
 };
 
+export type WaterStepData = {
+    waterHuvMap: string;
+    waterHeightMin: number;
+    waterHeightMax: number;
+    velocityUMin: number;
+    velocityUMax: number;
+    velocityVMin: number;
+    velocityVMax: number;
+};
+
 export default class FloodsRenderer {
     private _map: mapboxgl.Map;
     private _scene: ThreejsSceneLayer | null;
@@ -169,6 +179,15 @@ export default class FloodsRenderer {
     private _waterTextures: THREE.Texture[] = []; // 新增：在渲染器中缓存水体纹理
     private _simulationTime: number = 0.0;
     private _useConfigFile: boolean = false; // 新增变量，控制是否使用配置文件
+
+    private currentStepBeforeWaterData: WaterStepData | null = null;
+    private currentStepAfterWaterData: WaterStepData | null = null;
+    private nextStepWaterData: WaterStepData | null = null;
+    private currentBeforeWaterTexture: THREE.Texture | null = null;
+    private currentAfterWaterTexture: THREE.Texture | null = null;
+    private nextWaterTexture: THREE.Texture | null = null;
+    private currentWaterStep = 0;
+    private stepTime: number = 0.0;
 
     constructor(map: mapboxgl.Map) {
         this._map = map;
@@ -198,25 +217,25 @@ export default class FloodsRenderer {
 
     clean() {
         if (this._scene) this._map.removeLayer(this._scene.id);
-        
+
         // 清理动态更新定时器
         if ((this as any)._dynamicUpdateInterval) {
             clearInterval((this as any)._dynamicUpdateInterval);
             (this as any)._dynamicUpdateInterval = null;
         }
-        
+
         // 清理持续轮询定时器
         if ((this as any)._continuousPollingInterval) {
             clearInterval((this as any)._continuousPollingInterval);
             (this as any)._continuousPollingInterval = null;
         }
-        
+
         // 清理纹理缓存
         this._waterTextures.forEach(texture => {
             texture.dispose();
         });
         this._waterTextures = [];
-        
+
         // 停止资源轮询
         if (this._floodsResources) {
             this._floodsResources.stopPolling();
@@ -225,10 +244,10 @@ export default class FloodsRenderer {
 
     async initScene() {
         console.log('Starting scene initialization...');
-        
+
         // 第一步：获取初始数据并更新配置
         await this.loadInitialDataAndUpdateConfig();
-        
+
         // 第二步：计算统一的中心点（使用更新后的配置）
         const center = this.calculateUnifiedNormalizationAndCenter();
         const { center4326: sceneCenter } = center;
@@ -253,7 +272,7 @@ export default class FloodsRenderer {
             callback: function (model) {
                 if (model.children.length > 0) {
                     const group = model.children[0];
-                    
+
                     // 第三步：使用更新的配置创建mesh
                     scope._terrainMesh = scope.createTerrainMesh();
                     group.add(scope._terrainMesh);
@@ -263,6 +282,9 @@ export default class FloodsRenderer {
                     // 第四步：更新资源（纹理等）
                     scope.updateTerrainResources();
                     scope.updateWaterResources();
+
+                    scope.updateTerrainUniforms();
+
 
                     // 第五步：开始持续的水体数据轮询
                     scope.startContinuousWaterPolling();
@@ -319,10 +341,10 @@ export default class FloodsRenderer {
         const center4326 = this.convert3857To4326(centerX3857, centerY3857);
 
         // 计算归一化坐标（相对于中心点）
-        const terrainNormalizedCorners: [[number, number], [number, number], [number, number], [number, number]] = 
+        const terrainNormalizedCorners: [[number, number], [number, number], [number, number], [number, number]] =
             this._config.terrainCorners3857.map(([x, y]) => [x - centerX3857, y - centerY3857]) as [[number, number], [number, number], [number, number], [number, number]];
 
-        const waterNormalizedCorners: [[number, number], [number, number], [number, number], [number, number]] = 
+        const waterNormalizedCorners: [[number, number], [number, number], [number, number], [number, number]] =
             this._config.waterCorners3857.map(([x, y]) => [x - centerX3857, y - centerY3857]) as [[number, number], [number, number], [number, number], [number, number]];
 
         return {
@@ -353,39 +375,39 @@ export default class FloodsRenderer {
                 // 双线性插值计算（使用归一化坐标）
                 const scale = 0.93; // 缩放因子
                 const px = (1 - u) * (1 - v) * p00.x +
-                        u * (1 - v) * p10.x +
-                        u * v * p11.x +
-                        (1 - u) * v * p01.x;
+                    u * (1 - v) * p10.x +
+                    u * v * p11.x +
+                    (1 - u) * v * p01.x;
                 const py = (1 - u) * (1 - v) * p00.y +
-                        u * (1 - v) * p10.y +
-                        u * v * p11.y +
-                        (1 - u) * v * p01.y;
+                    u * (1 - v) * p10.y +
+                    u * v * p11.y +
+                    (1 - u) * v * p01.y;
 
                 vertices.push(px * scale, py * scale, 0);
                 uvs.push(u, v);
             }
         }
 
-    // 生成索引（两个三角形构成一个方格）
-    for (let iy = 0; iy < heightSegments; iy++) {
-        for (let ix = 0; ix < widthSegments; ix++) {
-            const a = iy * (widthSegments + 1) + ix;
-            const b = a + 1;
-            const c = a + (widthSegments + 1);
-            const d = c + 1;
+        // 生成索引（两个三角形构成一个方格）
+        for (let iy = 0; iy < heightSegments; iy++) {
+            for (let ix = 0; ix < widthSegments; ix++) {
+                const a = iy * (widthSegments + 1) + ix;
+                const b = a + 1;
+                const c = a + (widthSegments + 1);
+                const d = c + 1;
 
-            indices.push(a, b, d);
-            indices.push(a, d, c);
+                indices.push(a, b, d);
+                indices.push(a, d, c);
+            }
         }
-    }
 
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    geometry.setIndex(indices);
-    geometry.computeVertexNormals();
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+        geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+        geometry.setIndex(indices);
+        geometry.computeVertexNormals();
 
-    return geometry;
+        return geometry;
     }
 
     createTerrainMesh(): THREE.Mesh {
@@ -535,32 +557,31 @@ export default class FloodsRenderer {
     // 新增方法：加载初始数据并更新配置
     async loadInitialDataAndUpdateConfig() {
         console.log('Loading initial terrain and water data...');
-        
+
         try {
             // 获取地形数据
             const terrainData = await this._floodsResources.fetchTerrainData();
             console.log('Initial terrain data loaded:', terrainData);
-            
+
             // 更新配置中的地形相关数据
             this._config.terrainCorners3857 = terrainData.terrainCorners3857;
             console.log('Updated terrain corners in config:', this._config.terrainCorners3857);
-            
+
             // 手动获取第一批水体数据
             console.log('Fetching initial water data...');
             const success = await (this._floodsResources as any).fetchWaterDataStep();
             if (success) {
                 // 获取初始水体数据
                 const initialWaterData = await this._floodsResources.fetchWaterData();
-                console.log('Initial water data loaded:', {
-                    frameCount: initialWaterData.waterHuvMaps.length,
-                    corners: initialWaterData.waterCorners3857
-                });
-                
+
                 // 更新配置中的水体相关数据
                 this._config.waterCorners3857 = initialWaterData.waterCorners3857;
                 console.log('Updated water corners in config:', this._config.waterCorners3857);
+
+                this.currentStepBeforeWaterData = this._floodsResources.getWaterStepData(0);
+                this.currentStepAfterWaterData = this._floodsResources.getWaterStepData(0);
             }
-            
+
             console.log('Initial data loading and config update completed');
         } catch (error) {
             console.error('Error loading initial data:', error);
@@ -568,41 +589,41 @@ export default class FloodsRenderer {
         }
     }
 
-        // 新增方法：开始持续的水体数据轮询
+    // 新增方法：开始持续的水体数据轮询
     startContinuousWaterPolling() {
         console.log('Starting continuous water data polling...');
-        
+
         // 设置较长的帧时长以减少闪烁
-        this._floodsResources.setFrameDuration(3000); // 每帧3秒
-        
+        this._floodsResources.setFrameDuration(10000); // 每帧3秒
+
         // 开始轮询更多水体数据，但不立即更新显示
         const pollingInterval = setInterval(async () => {
             try {
                 const success = await (this._floodsResources as any).fetchWaterDataStep();
                 if (success) {
-                    console.log(`Current frame count: ${this._floodsResources.getCurrentFrameCount()}`);
+                    // console.log(`Current frame count: ${this._floodsResources.getCurrentFrameCount()}`);
                 } else {
-                    console.log('No more water data available, continuing to poll...');
+                    // console.log('No more water data available, continuing to poll...');
                 }
             } catch (error) {
                 console.error('Error in continuous water polling:', error);
             }
         }, 5000); // 减少轮询频率，每5秒轮询一次
-        
+
         // 存储 interval ID 以便后续清理
         (this as any)._continuousPollingInterval = pollingInterval;
-        
+
         // 定期更新水体资源显示，使用较长的间隔
-        const displayUpdateInterval = setInterval(async () => {
-            try {
-                await this.updateWaterResources();
-            } catch (error) {
-                console.error('Error during dynamic water resource update:', error);
-            }
-        }, this._floodsResources.getFrameDuration()); // 使用帧时长作为更新间隔
-        
+        // const displayUpdateInterval = setInterval(async () => {
+        //     try {
+        //         await this.updateWaterResources();
+        //     } catch (error) {
+        //         console.error('Error during dynamic water resource update:', error);
+        //     }
+        // }, this._floodsResources.getFrameDuration()); // 使用帧时长作为更新间隔
+
         // 存储 interval ID 以便后续清理
-        (this as any)._dynamicUpdateInterval = displayUpdateInterval;
+        // (this as any)._dynamicUpdateInterval = displayUpdateInterval;
     }
 
     async updateTerrainResources() {
@@ -617,10 +638,10 @@ export default class FloodsRenderer {
             terrainTexture.generateMipmaps = false; // 禁用 Mipmap
 
             this._terrainData.terrainTexture = terrainTexture;
-            
+
             // 更新配置中的角点信息
             this._config.terrainCorners3857 = this._terrainData.terrainCorners3857;
-            
+
             console.log('Terrain resources updated with new data');
         } else {
             console.error('No terrain data available from resources');
@@ -631,24 +652,34 @@ export default class FloodsRenderer {
         // 使用轮询机制获取的水体数据
         try {
             const data = await this._floodsResources.fetchWaterData();
-            
+
             // 直接替换数据
             this._waterData = data;
 
             // 检查是否有新的纹理URL需要加载
             const currentTextureCount = this._waterTextures.length;
             const requiredTextureCount = this._waterData.waterHuvMaps.length;
-            
+
             if (requiredTextureCount > currentTextureCount) {
                 console.log(`Loading ${requiredTextureCount - currentTextureCount} new water textures...`);
-                
+
                 // 只加载新的纹理
                 for (let i = currentTextureCount; i < requiredTextureCount; i++) {
                     const textureUrl = this._waterData.waterHuvMaps[i];
-                    const waterTexture = this._textureLoader.load(textureUrl, 
+                    const waterTexture = this._textureLoader.load(textureUrl,
                         // 纹理加载完成后的回调
                         () => {
-                            console.log(`Texture loaded successfully: ${textureUrl}`);
+                            // 设置纹理参数
+                            waterTexture.premultiplyAlpha = false;
+                            waterTexture.minFilter = THREE.NearestFilter;
+                            waterTexture.magFilter = THREE.LinearFilter;
+                            waterTexture.generateMipmaps = false;
+                            waterTexture.wrapS = THREE.ClampToEdgeWrapping;
+                            waterTexture.wrapT = THREE.ClampToEdgeWrapping;
+                            waterTexture.name = textureUrl;
+
+                            // 添加到纹理缓存
+                            this._waterTextures.push(waterTexture);
                         },
                         // 纹理加载进度回调
                         undefined,
@@ -657,31 +688,21 @@ export default class FloodsRenderer {
                             console.error(`Failed to load texture: ${textureUrl}`, error);
                         }
                     );
-                    
-                    // 设置纹理参数
-                    waterTexture.premultiplyAlpha = false;
-                    waterTexture.minFilter = THREE.NearestFilter;
-                    waterTexture.magFilter = THREE.LinearFilter;
-                    waterTexture.generateMipmaps = false;
-                    waterTexture.wrapS = THREE.ClampToEdgeWrapping;
-                    waterTexture.wrapT = THREE.ClampToEdgeWrapping;
-                    waterTexture.name = textureUrl;
-                    
-                    // 添加到纹理缓存
-                    this._waterTextures.push(waterTexture);
+
+
                 }
             }
 
             // 更新配置中的角点信息
             this._config.waterCorners3857 = this._waterData.waterCorners3857;
-            
+
             console.log(`Water resources updated. Total textures: ${this._waterTextures.length}`);
         } catch (error) {
             console.error('Error updating water resources:', error);
         }
     }
 
-    updateTerrainUniforms(time: number) {
+    updateTerrainUniforms() {
         const material = this._terrainMesh?.material as THREE.ShaderMaterial;
         if (!material || !this._terrainData || !this._terrainData.terrainTexture) {
             return;
@@ -705,17 +726,17 @@ export default class FloodsRenderer {
         }
 
         // 使用固定的帧时长进行连续播放
-        const frameDuration = this._floodsResources.getFrameDuration(); 
-        
+        const frameDuration = this._floodsResources.getFrameDuration();
+
         let currIndex = Math.floor(time / frameDuration) % numRasters;
         let nextIndex = (currIndex + 1) % numRasters;
         const timeStep = (time % frameDuration) / frameDuration;
-        
+
         // 确保索引在有效范围内
         currIndex = Math.max(0, Math.min(currIndex, numRasters - 1));
         nextIndex = Math.max(0, Math.min(nextIndex, numRasters - 1));
-
         // 确保纹理加载完成
+
         if (!this._waterTextures[currIndex] || !this._waterTextures[nextIndex]) {
             console.warn('Skipping frame update: textures not fully loaded');
             return;
@@ -756,9 +777,130 @@ export default class FloodsRenderer {
         }
     }
 
+    updateWaterUniforms2(time: number, stepStartCallback: () => void) {
+        console.log(1)
+        const material = this._waterMesh?.material as THREE.ShaderMaterial;
+        if (!material || !this._waterData || this._waterTextures.length === 0 || !this._terrainData || !this._terrainData.terrainTexture) {
+            return;
+        }
+
+        const numRasters = this._waterTextures.length;
+        if (numRasters < 1) {
+            return;
+        }
+
+        // 使用固定的帧时长进行连续播放
+        const frameDuration = this._floodsResources.getFrameDuration();
+
+        const timeStep = this.stepTime / frameDuration;
+        if (timeStep >= 1.0) {
+            this.stepTime = 0.0;
+        }
+
+        if (this.stepTime === 0.0) {
+            console.log("currentStep:", this.currentWaterStep)
+            stepStartCallback();
+        }
+
+        // 更新uniforms
+        const uniforms = material.uniforms;
+
+        uniforms.time.value = time;
+        uniforms.timeStep.value = timeStep;
+
+        uniforms.terrainMap.value = this._terrainData.terrainTexture;
+        uniforms.minTerrainHeight.value = this._terrainData.terrainHeightMin;
+        uniforms.maxTerrainHeight.value = this._terrainData.terrainHeightMax;
+        uniforms.terrainMapSize.value = new THREE.Vector2(...this._terrainData.terrainMapSize);
+        uniforms.huvMapSize.value = new THREE.Vector2(...this._waterData.waterHuvMapsSize);
+
+        uniforms.huvMapBefore.value = this.currentBeforeWaterTexture;
+        uniforms.huvMapAfter.value = this.currentAfterWaterTexture;
+
+        if (!this.currentStepBeforeWaterData || !this.currentStepAfterWaterData) {
+            return;
+        }
+
+        // 确保数据数组索引有效
+        uniforms.minWaterHeightBefore.value = this.currentStepBeforeWaterData.waterHeightMin;
+        uniforms.maxWaterHeightBefore.value = this.currentStepBeforeWaterData.waterHeightMax;
+        uniforms.minVelocityUBefore.value = this.currentStepBeforeWaterData.velocityUMin;
+        uniforms.maxVelocityUBefore.value = this.currentStepBeforeWaterData.velocityUMax;
+        uniforms.minVelocityVBefore.value = this.currentStepBeforeWaterData.velocityVMin;
+        uniforms.maxVelocityVBefore.value = this.currentStepBeforeWaterData.velocityVMax;
+
+        uniforms.minWaterHeightAfter.value = this.currentStepAfterWaterData.waterHeightMin;
+        uniforms.maxWaterHeightAfter.value = this.currentStepAfterWaterData.waterHeightMax;
+        uniforms.minVelocityUAfter.value = this.currentStepAfterWaterData.velocityUMin;
+        uniforms.maxVelocityUAfter.value = this.currentStepAfterWaterData.velocityUMax;
+        uniforms.minVelocityVAfter.value = this.currentStepAfterWaterData.velocityVMin;
+        uniforms.maxVelocityVAfter.value = this.currentStepAfterWaterData.velocityVMax;
+    }
+
     updateSceneTime(time: number, delta: number) {
         this._simulationTime += delta;
-        this.updateTerrainUniforms(this._simulationTime);
-        this.updateWaterUniforms(this._simulationTime);
+        this.stepTime += delta;
+        this.updateWaterUniforms2(this._simulationTime, this.handleWaterStepStart.bind(this));
     }
+
+
+    handleWaterStepStart() {
+        if (this.nextStepWaterData) {
+            this.currentStepBeforeWaterData = this.currentStepAfterWaterData;
+            this.currentStepAfterWaterData = this.nextStepWaterData;
+            this.currentBeforeWaterTexture?.dispose();
+            this.currentBeforeWaterTexture = this.currentAfterWaterTexture;
+            this.currentAfterWaterTexture = this.nextWaterTexture;
+        } else {
+            // 第一次执行该函数，此时before和after均为第一个步长的数据，需初始化纹理
+            const textureUrl = this.currentStepBeforeWaterData?.waterHuvMap;
+            if (!textureUrl) {
+                return;
+            }
+            console.log("startload")
+            const texture = this._textureLoader.load(textureUrl,
+                () => {
+                    console.log("endload")
+
+                    texture.premultiplyAlpha = false;
+                    texture.minFilter = THREE.NearestFilter;
+                    texture.magFilter = THREE.LinearFilter;
+                    texture.generateMipmaps = false;
+                    texture.wrapS = THREE.ClampToEdgeWrapping;
+                    texture.wrapT = THREE.ClampToEdgeWrapping;
+                    texture.name = textureUrl;
+                    this.currentBeforeWaterTexture = texture;
+                    this.currentAfterWaterTexture = texture;
+                }
+            )
+        }
+
+        const nextStep = this._floodsResources.getNextStep(this.currentWaterStep);
+        this.nextStepWaterData = this._floodsResources.getWaterStepData(nextStep);
+
+        if (!this.nextStepWaterData) {
+            console.log("未加载下一个水流数据！")
+            return;
+        }
+
+        const newTextureUrl = this.nextStepWaterData.waterHuvMap;
+        console.log("startload")
+        const newTexture = this._textureLoader.load(newTextureUrl,
+            () => {
+                console.log("endload")
+
+                newTexture.premultiplyAlpha = false;
+                newTexture.minFilter = THREE.NearestFilter;
+                newTexture.magFilter = THREE.LinearFilter;
+                newTexture.generateMipmaps = false;
+                newTexture.wrapS = THREE.ClampToEdgeWrapping;
+                newTexture.wrapT = THREE.ClampToEdgeWrapping;
+                newTexture.name = newTextureUrl;
+                this.nextWaterTexture = newTexture;
+
+            }
+        )
+        this.currentWaterStep = nextStep;
+    }
+
 }

@@ -1,4 +1,4 @@
-import { TerrainData, WaterData } from './renderer0';
+import { TerrainData, WaterData, WaterStepData } from './renderer0';
 
 interface TerrainApiResponse {
     success: boolean;
@@ -54,10 +54,11 @@ export default class FloodsResources {
     private isPolling = false;
     private isDataReady = false;
     private renderReadyCallback: (() => void) | null = null;
-    
+
     // 记录每一帧的单帧时长（毫秒）
     private frameDuration: number = 3000;
-    
+    private maxStepCount: number = 99999;
+
     constructor() {
         console.log('FloodsResources initialized');
     }
@@ -66,7 +67,7 @@ export default class FloodsResources {
     setFrameDuration(frameDuration: number): void {
         this.frameDuration = frameDuration;
         console.log(`Frame duration set to: ${this.frameDuration}ms`);
-    } 
+    }
 
     // 获取 TerrainData（仅获取一次）
     async fetchTerrainData(): Promise<TerrainData> {
@@ -77,7 +78,7 @@ export default class FloodsResources {
         try {
             const response = await fetch('http://192.168.31.201:8001/api/solution/get_terrain_data/root.solutions.solution4');
             const result: TerrainApiResponse = await response.json();
-            
+
             if (result.success) {
                 // 直接使用后端提供的地形图像路径和角点数据
                 // 按照左下、右下、右上、左上的顺序组装角点数组
@@ -109,22 +110,25 @@ export default class FloodsResources {
 
     // 轮询获取 WaterData
     async fetchWaterDataStep(): Promise<boolean> {
-        console.log(`fetchWaterDataStep called - current step: ${this.currentWaterStep}`);
         try {
+            if (this.currentWaterStep >= this.maxStepCount) {
+                return false;
+            }
+
             const url = `http://192.168.31.201:8001/api/simulation/get_water_data/simulation1/${this.currentWaterStep}`;
-            
+
             const response = await fetch(url);
-            
+
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             const result: WaterApiResponse = await response.json();
-            
+
             if (result.success) {
                 // 直接使用后端提供的水体图像路径
                 // 累计持续时间
                 this.waterData.durationTime += result.data.durationTime;
-                
+
                 // 尺寸只存储一次
                 if (this.waterData.waterHuvMapsSize[0] === 0) {
                     this.waterData.waterHuvMapsSize = result.data.waterHuvMapsSize;
@@ -151,7 +155,7 @@ export default class FloodsResources {
                 this.waterData.velocityVMin.push(result.data.velocityVMin);
                 this.waterData.velocityVMax.push(result.data.velocityVMax);
 
-                console.log(`WaterData step ${this.currentWaterStep} fetched successfully. Total maps: ${this.waterData.waterHuvMaps.length}`);
+                // console.log(`WaterData step ${this.currentWaterStep} fetched successfully. Total maps: ${this.waterData.waterHuvMaps.length}`);
 
                 // 递增步数，准备获取下一步数据
                 this.currentWaterStep++;
@@ -159,7 +163,7 @@ export default class FloodsResources {
                 // 当获取到第一个 WaterData 时，标记数据准备就绪
                 if (this.waterData.waterHuvMaps.length === 1 && !this.isDataReady) {
                     this.isDataReady = true;
-                    
+
                     // 触发渲染准备回调
                     if (this.terrainData && this.renderReadyCallback) {
                         console.log('Initial data ready - triggering render');
@@ -170,11 +174,12 @@ export default class FloodsResources {
 
                 return true;
             } else {
-                console.log(`No more water data available at step ${this.currentWaterStep}`);
+                // console.log(`No more water data available at step ${this.currentWaterStep}`);
                 return false;
             }
         } catch (error) {
-            console.error(`Error fetching water data step ${this.currentWaterStep}:`, error);
+            console.log(`Error fetching water data step ${this.currentWaterStep}:`, error);
+            this.maxStepCount = this.currentWaterStep;
             return false;
         }
     }
@@ -197,7 +202,7 @@ export default class FloodsResources {
             // 立即进行第一次水体数据获取
             console.log('Starting first water data fetch...');
             const firstSuccess = await this.fetchWaterDataStep();
-            
+
             // 如果第一次成功且还需要更多数据，开始定时轮询
             if (firstSuccess && this.isPolling) {
                 this.pollingIntervalId = window.setInterval(async () => {
@@ -264,4 +269,30 @@ export default class FloodsResources {
     getCurrentFrameCount(): number {
         return this.waterData.waterHuvMaps.length;
     }
+
+    getWaterStepData(step: number): WaterStepData | null {
+        // 检查数组是否为空
+        if (this.waterData.waterHuvMaps.length <= step) {
+            return null;
+        }
+
+        // 返回包含最后一个值的新对象
+        return {
+            waterHuvMap: this.waterData.waterHuvMaps[step],
+            waterHeightMin: this.waterData.waterHeightMin[step],
+            waterHeightMax: this.waterData.waterHeightMax[step],
+            velocityUMin: this.waterData.velocityUMin[step],
+            velocityUMax: this.waterData.velocityUMax[step],
+            velocityVMin: this.waterData.velocityVMin[step],
+            velocityVMax: this.waterData.velocityVMax[step]
+        };
+    }
+
+    getNextStep(step: number): number {
+        if (step === this.waterData.waterHuvMaps.length - 1) {
+            return 0;
+        }
+        return step + 1;
+    }
+
 }
