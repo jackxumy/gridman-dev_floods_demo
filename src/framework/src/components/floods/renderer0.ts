@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-this-alias */
 import Model from '@/threejs/model/model';
 import ThreejsSceneLayer from '@/threejs/threejs-scene';
 import { extend } from '@/threejs/utils/Util';
@@ -260,6 +259,7 @@ export default class FloodsRenderer {
 
         this._map.addLayer(this._scene);
 
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         const scope = this;
         // 使用计算得到的中心点
         const { center4326: modelCenter } = center;
@@ -778,14 +778,14 @@ export default class FloodsRenderer {
     }
 
     updateWaterUniforms2(time: number, stepStartCallback: () => void) {
-        console.log(1)
 
         // 使用固定的帧时长进行连续播放
         const frameDuration = this._floodsResources.getFrameDuration();
 
-        const timeStep = this.stepTime / frameDuration;
+        let timeStep = this.stepTime / frameDuration;
         if (timeStep >= 1.0) {
             this.stepTime = 0.0;
+            timeStep = 0.0
         }
 
         if (this.stepTime === 0.0) {
@@ -808,16 +808,21 @@ export default class FloodsRenderer {
         uniforms.minTerrainHeight.value = this._terrainData.terrainHeightMin;
         uniforms.maxTerrainHeight.value = this._terrainData.terrainHeightMax;
         uniforms.terrainMapSize.value = new THREE.Vector2(...this._terrainData.terrainMapSize);
-        uniforms.huvMapSize.value = new THREE.Vector2(...this._waterData.waterHuvMapsSize);
 
-        uniforms.huvMapBefore.value = this.currentBeforeWaterTexture;
-        uniforms.huvMapAfter.value = this.currentAfterWaterTexture;
 
         if (!this.currentStepBeforeWaterData || !this.currentStepAfterWaterData) {
             return;
         }
-
+        
+        console.log(this._waterData, this.currentStepBeforeWaterData, this.currentStepAfterWaterData)
+        
         // 确保数据数组索引有效
+        uniforms.huvMapSize.value = new THREE.Vector2(...this._waterData.waterHuvMapsSize);
+
+
+        uniforms.huvMapBefore.value = this.currentBeforeWaterTexture;
+        uniforms.huvMapAfter.value = this.currentAfterWaterTexture;
+
         uniforms.minWaterHeightBefore.value = this.currentStepBeforeWaterData.waterHeightMin;
         uniforms.maxWaterHeightBefore.value = this.currentStepBeforeWaterData.waterHeightMax;
         uniforms.minVelocityUBefore.value = this.currentStepBeforeWaterData.velocityUMin;
@@ -842,6 +847,7 @@ export default class FloodsRenderer {
 
     handleWaterStepStart() {
         if (this.nextStepWaterData) {
+
             this.currentStepBeforeWaterData = this.currentStepAfterWaterData;
             this.currentStepAfterWaterData = this.nextStepWaterData;
             this.currentBeforeWaterTexture?.dispose();
